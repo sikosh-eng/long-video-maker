@@ -12,23 +12,37 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
 
-      - name: Create Android project files
-        run: flutter create --platforms=android --project-name long_video_maker .
+      - name: Check Flutter
+        run: |
+          flutter --version
+          dart --version
+
+      - name: Create Android files
+        run: |
+          flutter create \
+            --platforms=android \
+            --project-name long_video_maker \
+            .
 
       - name: Get dependencies
         run: flutter pub get
 
+      - name: Analyze project
+        run: flutter analyze || true
+
       - name: Build APK
-        run: flutter build apk --release
+        run: flutter build apk --release --verbose
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: long-video-maker-apk
