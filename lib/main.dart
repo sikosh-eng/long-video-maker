@@ -1,4 +1,5 @@
-import 'dart:io';
+ import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
@@ -21,8 +22,8 @@ class LongVideoMaker extends StatelessWidget {
       title: 'Long Video Maker',
       theme: ThemeData(
         brightness: Brightness.dark,
-        colorSchemeSeed: Colors.blue,
         useMaterial3: true,
+        colorSchemeSeed: Colors.blue,
       ),
       home: const HomePage(),
     );
@@ -37,59 +38,142 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final ImagePicker _imagePicker = ImagePicker();
+  final ImagePicker picker = ImagePicker();
 
   List<XFile> images = [];
-  String? audioPath;
 
-  bool isProcessing = false;
+  String? voicePath;
+  String? musicPath;
+
+  String format = '9:16';
+  String resolution = '1080p';
+  int fps = 30;
+
+  bool autoDuration = true;
+  bool zoomEnabled = true;
+  bool transitionsEnabled = true;
+
+  double voiceVolume = 100;
+  double musicVolume = 20;
+
+  bool processing = false;
   double progress = 0;
 
   String status = 'Готово к работе';
 
-  Future<void> selectImages() async {
-    try {
-      final selected = await _imagePicker.pickMultiImage();
+  // ------------------------------------------------------------
+  // IMAGE PICKER
+  // ------------------------------------------------------------
 
-      if (selected.isNotEmpty) {
+  Future<void> pickImages() async {
+    try {
+      final result = await picker.pickMultiImage();
+
+      if (result.isNotEmpty) {
         setState(() {
-          images = selected;
+          images = result;
           status = 'Выбрано изображений: ${images.length}';
         });
       }
     } catch (e) {
-      showError('Не удалось выбрать изображения:\n$e');
+      showError('Ошибка выбора изображений:\n$e');
     }
   }
 
-  Future<void> selectAudio() async {
+  // ------------------------------------------------------------
+  // AUDIO PICKER
+  // ------------------------------------------------------------
+
+  Future<void> pickVoice() async {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.audio,
         allowMultiple: false,
       );
 
-      if (result != null &&
-          result.files.single.path != null) {
+      if (result != null && result.files.single.path != null) {
         setState(() {
-          audioPath = result.files.single.path!;
+          voicePath = result.files.single.path;
           status = 'Озвучка выбрана';
         });
       }
     } catch (e) {
-      showError('Не удалось выбрать озвучку:\n$e');
+      showError('Ошибка выбора озвучки:\n$e');
     }
   }
+
+  Future<void> pickMusic() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.audio,
+        allowMultiple: false,
+      );
+
+      if (result != null && result.files.single.path != null) {
+        setState(() {
+          musicPath = result.files.single.path;
+          status = 'Музыка выбрана';
+        });
+      }
+    } catch (e) {
+      showError('Ошибка выбора музыки:\n$e');
+    }
+  }
+
+  // ------------------------------------------------------------
+  // VIDEO SIZE
+  // ------------------------------------------------------------
+
+  String getVideoSize() {
+    int base;
+
+    switch (resolution) {
+      case '480p':
+        base = 480;
+        break;
+
+      case '720p':
+        base = 720;
+        break;
+
+      case '1440p':
+        base = 1440;
+        break;
+
+      case '2160p':
+        base = 2160;
+        break;
+
+      default:
+        base = 1080;
+    }
+
+    if (format == '16:9') {
+      return '${base}x${(base * 9 / 16).round()}';
+    }
+
+    if (format == '1:1') {
+      return '${base}x$base';
+    }
+
+    return '${(base * 9 / 16).round()}x$base';
+  }
+
+  // ------------------------------------------------------------
+  // AUDIO DURATION
+  // ------------------------------------------------------------
 
   Future<double?> getAudioDuration(String path) async {
     try {
       final session = await FFmpegKit.execute(
-        '-i "${escapePath(path)}" -f null -'
+        '-i "${escape(path)}" -f null -',
       );
 
       final output = await session.getOutput();
 
-      if (output == null) return null;
+      if (output == null) {
+        return null;
+      }
 
       final regex = RegExp(
         r'Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)',
@@ -97,7 +181,9 @@ class _HomePageState extends State<HomePage> {
 
       final match = regex.firstMatch(output);
 
-      if (match == null) return null;
+      if (match == null) {
+        return null;
+      }
 
       final hours = double.parse(match.group(1)!);
       final minutes = double.parse(match.group(2)!);
@@ -109,59 +195,59 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  String escapePath(String path) {
-    return path.replaceAll('"', '\\"');
+  String escape(String value) {
+    return value.replaceAll('"', '\\"');
   }
+
+  // ------------------------------------------------------------
+  // CREATE VIDEO
+  // ------------------------------------------------------------
 
   Future<void> createVideo() async {
     if (images.isEmpty) {
-      showError('Сначала добавь изображения.');
+      showError('Добавь изображения.');
       return;
     }
 
-    if (audioPath == null) {
-      showError('Сначала добавь озвучку.');
+    if (voicePath == null) {
+      showError('Добавь озвучку.');
       return;
     }
 
     setState(() {
-      isProcessing = true;
+      processing = true;
       progress = 0.05;
-      status = 'Определяем длительность озвучки...';
+      status = 'Анализируем озвучку...';
     });
 
     try {
-      final audioDuration = await getAudioDuration(audioPath!);
+      final duration = await getAudioDuration(voicePath!);
 
-      if (audioDuration == null || audioDuration <= 0) {
+      if (duration == null || duration <= 0) {
         throw Exception(
           'Не удалось определить длительность озвучки.',
         );
       }
 
-      final secondsPerImage =
-          audioDuration / images.length;
+      final imageDuration =
+          autoDuration ? duration / images.length : 5.0;
 
       setState(() {
         progress = 0.15;
         status =
-            'Длительность: ${audioDuration.toStringAsFixed(1)} сек\n'
-            'На одну картинку: ${secondsPerImage.toStringAsFixed(2)} сек';
+            'Озвучка: ${duration.toStringAsFixed(1)} сек\n'
+            'На картинку: ${imageDuration.toStringAsFixed(2)} сек';
       });
 
-      final tempDir = await getTemporaryDirectory();
+      final temp = await getTemporaryDirectory();
 
       final listFile = File(
-        '${tempDir.path}/images.txt',
+        '${temp.path}/images.txt',
       );
 
       final outputFile = File(
-        '${tempDir.path}/long_video.mp4',
+        '${temp.path}/long_video_${DateTime.now().millisecondsSinceEpoch}.mp4',
       );
-
-      if (outputFile.existsSync()) {
-        await outputFile.delete();
-      }
 
       final buffer = StringBuffer();
 
@@ -173,12 +259,10 @@ class _HomePageState extends State<HomePage> {
         );
 
         buffer.writeln(
-          'duration ${secondsPerImage.toStringAsFixed(3)}',
+          'duration ${imageDuration.toStringAsFixed(3)}',
         );
       }
 
-      // Последнее изображение повторяем,
-      // чтобы FFmpeg корректно завершил concat.
       if (images.isNotEmpty) {
         final last = images.last.path;
 
@@ -187,62 +271,153 @@ class _HomePageState extends State<HomePage> {
         );
       }
 
-      await listFile.writeAsString(buffer.toString());
+      await listFile.writeAsString(
+        buffer.toString(),
+      );
 
       setState(() {
         progress = 0.25;
         status = 'Создаём видеоряд...';
       });
 
-      final command = [
-        '-y',
-        '-f concat',
-        '-safe 0',
-        '-i "${listFile.path}"',
-        '-i "${escapePath(audioPath!)}"',
-        '-vf "scale=1080:1920:force_original_aspect_ratio=increase,'
-            'crop=1080:1920,'
-            'format=yuv420p"',
-        '-r 30',
-        '-c:v libx264',
-        '-preset veryfast',
-        '-crf 23',
-        '-c:a aac',
-        '-b:a 192k',
-        '-shortest',
-        '-movflags +faststart',
-        '"${outputFile.path}"',
-      ].join(' ');
+      final size = getVideoSize();
 
-      final session = await FFmpegKit.executeAsync(
+      String videoFilter =
+          'scale=$size:force_original_aspect_ratio=increase,'
+          'crop=$size,'
+          'format=yuv420p';
+
+      // --------------------------------------------------------
+      // ZOOM
+      // --------------------------------------------------------
+
+      if (zoomEnabled) {
+        videoFilter =
+            'scale=$size:force_original_aspect_ratio=increase,'
+            'crop=$size,'
+            'zoompan='
+            'z=min(zoom+0.0008,1.08):'
+            'x=iw/2-(iw/zoom/2):'
+            'y=ih/2-(ih/zoom/2):'
+            'd=1:'
+            's=$size:'
+            'fps=$fps,'
+            'format=yuv420p';
+      }
+
+      // --------------------------------------------------------
+      // AUDIO
+      // --------------------------------------------------------
+
+      String audioInput =
+          '-i "${escape(voicePath!)}"';
+
+      String audioFilter =
+          'volume=${(voiceVolume / 100).toStringAsFixed(2)}';
+
+      String extraAudio = '';
+
+      if (musicPath != null) {
+        extraAudio =
+            '-stream_loop -1 '
+            '-i "${escape(musicPath!)}"';
+
+        audioFilter =
+            '[1:a]volume=${(voiceVolume / 100).toStringAsFixed(2)}[voice];'
+            '[2:a]volume=${(musicVolume / 100).toStringAsFixed(2)}[music];'
+            '[voice][music]amix=inputs=2:duration=first[a]';
+      }
+
+      // --------------------------------------------------------
+      // COMMAND
+      // --------------------------------------------------------
+
+      String command;
+
+      if (musicPath != null) {
+        command = [
+          '-y',
+          '-f concat',
+          '-safe 0',
+          '-i "${listFile.path}"',
+          audioInput,
+          extraAudio,
+          '-vf "$videoFilter"',
+          '-filter_complex "$audioFilter"',
+          '-map 0:v',
+          '-map "[a]"',
+          '-r $fps',
+          '-c:v libx264',
+          '-preset veryfast',
+          '-crf 23',
+          '-c:a aac',
+          '-b:a 192k',
+          '-shortest',
+          '-movflags +faststart',
+          '"${outputFile.path}"',
+        ].join(' ');
+      } else {
+        command = [
+          '-y',
+          '-f concat',
+          '-safe 0',
+          '-i "${listFile.path}"',
+          audioInput,
+          '-vf "$videoFilter"',
+          '-af "$audioFilter"',
+          '-r $fps',
+          '-c:v libx264',
+          '-preset veryfast',
+          '-crf 23',
+          '-c:a aac',
+          '-b:a 192k',
+          '-shortest',
+          '-movflags +faststart',
+          '"${outputFile.path}"',
+        ].join(' ');
+      }
+
+      setState(() {
+        progress = 0.30;
+        status =
+            'Рендеринг...\n'
+            '$size • $fps FPS';
+      });
+
+      await FFmpegKit.executeAsync(
         command,
-        (completedSession) async {
+        (session) async {
           final returnCode =
-              await completedSession.getReturnCode();
+              await session.getReturnCode();
 
           if (ReturnCode.isSuccess(returnCode)) {
             setState(() {
-              isProcessing = false;
+              processing = false;
               progress = 1.0;
               status =
-                  '✅ Видео готово!\n${outputFile.path}';
+                  '✅ Видео готово!\n\n'
+                  'Размер: $size\n'
+                  'FPS: $fps\n\n'
+                  '${outputFile.path}';
             });
 
             showSuccess(
               'Видео успешно создано!\n\n'
-              'Файл находится во временной папке приложения.',
+              'Формат: $format\n'
+              'Разрешение: $resolution\n'
+              'FPS: $fps',
             );
           } else {
-            final logs =
-                await completedSession.getOutput();
+            final output =
+                await session.getOutput();
 
             setState(() {
-              isProcessing = false;
+              processing = false;
               status = '❌ Ошибка FFmpeg';
             });
 
             showError(
-              'FFmpeg завершился с ошибкой.\n\n$logs',
+              'Ошибка создания видео:\n\n$output',
             );
           }
         },
@@ -252,28 +427,23 @@ class _HomePageState extends State<HomePage> {
         (statistics) {
           final time = statistics.getTime();
 
-          if (audioDuration > 0) {
-            final calculated =
-                0.25 +
-                ((time / 1000) / audioDuration) * 0.70;
+          if (duration > 0) {
+            final value =
+                0.30 +
+                ((time / 1000) / duration) * 0.65;
 
-            setState(() {
-              progress =
-                  calculated.clamp(0.25, 0.95);
-            });
+            if (mounted) {
+              setState(() {
+                progress =
+                    value.clamp(0.30, 0.95);
+              });
+            }
           }
         },
       );
-
-      setState(() {
-        progress = 0.30;
-        status = 'Рендеринг видео...';
-      });
-
-      await session;
     } catch (e) {
       setState(() {
-        isProcessing = false;
+        processing = false;
         progress = 0;
         status = 'Ошибка';
       });
@@ -282,32 +452,9 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  void showError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.red,
-      ),
-    );
-  }
-
-  void showSuccess(String message) {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Готово 🎉'),
-          content: Text(message),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('OK'),
-            ),
-          ],
-        );
-      },
-    );
-  }
+  // ------------------------------------------------------------
+  // UI
+  // ------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
@@ -323,53 +470,43 @@ class _HomePageState extends State<HomePage> {
       ),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(18),
           child: Column(
             crossAxisAlignment:
                 CrossAxisAlignment.stretch,
             children: [
+              const SizedBox(height: 5),
+
+              const Icon(
+                Icons.movie_creation,
+                size: 60,
+              ),
+
               const SizedBox(height: 10),
 
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  borderRadius:
-                      BorderRadius.circular(20),
-                  color: Colors.white.withOpacity(0.06),
-                ),
-                child: const Column(
-                  children: [
-                    Icon(
-                      Icons.movie_creation_outlined,
-                      size: 60,
-                    ),
-                    SizedBox(height: 10),
-                    Text(
-                      'Автоматический монтаж',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    SizedBox(height: 5),
-                    Text(
-                      'Картинки + озвучка → готовое видео',
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
+              const Text(
+                'AUTO VIDEO MAKER',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
 
               const SizedBox(height: 20),
 
+              // IMAGES
+
               ElevatedButton.icon(
                 onPressed:
-                    isProcessing ? null : selectImages,
-                icon: const Icon(Icons.photo_library),
+                    processing ? null : pickImages,
+                icon: const Icon(
+                  Icons.photo_library,
+                ),
                 label: Text(
                   images.isEmpty
-                      ? 'Добавить картинки'
-                      : 'Картинки: ${images.length}',
+                      ? 'Добавить изображения'
+                      : 'Изображения: ${images.length}',
                 ),
                 style: ElevatedButton.styleFrom(
                   padding:
@@ -379,16 +516,39 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
 
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
+
+              // VOICE
 
               ElevatedButton.icon(
                 onPressed:
-                    isProcessing ? null : selectAudio,
+                    processing ? null : pickVoice,
                 icon: const Icon(Icons.mic),
                 label: Text(
-                  audioPath == null
+                  voicePath == null
                       ? 'Добавить озвучку'
-                      : 'Озвучка выбрана ✓',
+                      : 'Озвучка ✓',
+                ),
+                style: ElevatedButton.styleFrom(
+                  padding:
+                      const EdgeInsets.symmetric(
+                    vertical: 17,
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 10),
+
+              // MUSIC
+
+              ElevatedButton.icon(
+                onPressed:
+                    processing ? null : pickMusic,
+                icon: const Icon(Icons.music_note),
+                label: Text(
+                  musicPath == null
+                      ? 'Добавить музыку'
+                      : 'Музыка ✓',
                 ),
                 style: ElevatedButton.styleFrom(
                   padding:
@@ -399,141 +559,169 @@ class _HomePageState extends State<HomePage> {
               ),
 
               const SizedBox(height: 20),
+
+              // SETTINGS
 
               Card(
                 child: Padding(
-                  padding:
-                      const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(16),
                   child: Column(
+                    crossAxisAlignment:
+                        CrossAxisAlignment.stretch,
                     children: [
                       const Text(
-                        'Настройки',
+                        '⚙️ Настройки видео',
                         style: TextStyle(
-                          fontSize: 18,
+                          fontSize: 20,
                           fontWeight:
                               FontWeight.bold,
                         ),
                       ),
-                      const SizedBox(height: 15),
-                      const Row(
-                        mainAxisAlignment:
-                            MainAxisAlignment
-                                .spaceBetween,
-                        children: [
-                          Text('Формат'),
-                          Text(
-                            '9:16',
-                            style: TextStyle(
-                              fontWeight:
-                                  FontWeight.bold,
-                            ),
+
+                      const SizedBox(height: 20),
+
+                      const Text(
+                        'Формат',
+                        style: TextStyle(
+                          fontWeight:
+                              FontWeight.bold,
+                        ),
+                      ),
+
+                      const SizedBox(height: 8),
+
+                      SegmentedButton<String>(
+                        segments: const [
+                          ButtonSegment(
+                            value: '9:16',
+                            label: Text('9:16'),
+                          ),
+                          ButtonSegment(
+                            value: '16:9',
+                            label: Text('16:9'),
+                          ),
+                          ButtonSegment(
+                            value: '1:1',
+                            label: Text('1:1'),
                           ),
                         ],
+                        selected: {format},
+                        onSelectionChanged:
+                            processing
+                                ? null
+                                : (value) {
+                                    setState(() {
+                                      format =
+                                          value.first;
+                                    });
+                                  },
                       ),
-                      const SizedBox(height: 10),
-                      const Row(
-                        mainAxisAlignment:
-                            MainAxisAlignment
-                                .spaceBetween,
-                        children: [
-                          Text('Разрешение'),
-                          Text(
-                            '1080 × 1920',
-                            style: TextStyle(
-                              fontWeight:
-                                  FontWeight.bold,
-                            ),
+
+                      const SizedBox(height: 20),
+
+                      const Text(
+                        'Разрешение',
+                        style: TextStyle(
+                          fontWeight:
+                              FontWeight.bold,
+                        ),
+                      ),
+
+                      const SizedBox(height: 8),
+
+                      DropdownButtonFormField<String>(
+                        value: resolution,
+                        decoration:
+                            const InputDecoration(
+                          border:
+                              OutlineInputBorder(),
+                        ),
+                        items: const [
+                          DropdownMenuItem(
+                            value: '480p',
+                            child: Text('480p'),
+                          ),
+                          DropdownMenuItem(
+                            value: '720p',
+                            child: Text('720p HD'),
+                          ),
+                          DropdownMenuItem(
+                            value: '1080p',
+                            child: Text('1080p Full HD'),
+                          ),
+                          DropdownMenuItem(
+                            value: '1440p',
+                            child: Text('1440p 2K'),
+                          ),
+                          DropdownMenuItem(
+                            value: '2160p',
+                            child: Text('2160p 4K'),
                           ),
                         ],
+                        onChanged:
+                            processing
+                                ? null
+                                : (value) {
+                                    if (value !=
+                                        null) {
+                                      setState(() {
+                                        resolution =
+                                            value;
+                                      });
+                                    }
+                                  },
                       ),
-                      const SizedBox(height: 10),
-                      const Row(
-                        mainAxisAlignment:
-                            MainAxisAlignment
-                                .spaceBetween,
-                        children: [
-                          Text('FPS'),
-                          Text(
-                            '30',
-                            style: TextStyle(
-                              fontWeight:
-                                  FontWeight.bold,
-                            ),
+
+                      const SizedBox(height: 20),
+
+                      const Text(
+                        'FPS',
+                        style: TextStyle(
+                          fontWeight:
+                              FontWeight.bold,
+                        ),
+                      ),
+
+                      const SizedBox(height: 8),
+
+                      DropdownButtonFormField<int>(
+                        value: fps,
+                        decoration:
+                            const InputDecoration(
+                          border:
+                              OutlineInputBorder(),
+                        ),
+                        items: const [
+                          DropdownMenuItem(
+                            value: 24,
+                            child: Text('24 FPS'),
+                          ),
+                          DropdownMenuItem(
+                            value: 25,
+                            child: Text('25 FPS'),
+                          ),
+                          DropdownMenuItem(
+                            value: 30,
+                            child: Text('30 FPS'),
+                          ),
+                          DropdownMenuItem(
+                            value: 50,
+                            child: Text('50 FPS'),
+                          ),
+                          DropdownMenuItem(
+                            value: 60,
+                            child: Text('60 FPS'),
                           ),
                         ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 20),
-
-              if (isProcessing) ...[
-                LinearProgressIndicator(
-                  value: progress,
-                  minHeight: 8,
-                  borderRadius:
-                      BorderRadius.circular(10),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  '${(progress * 100).toInt()}%',
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 10),
-              ],
-
-              Text(
-                status,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white.withOpacity(0.8),
-                ),
-              ),
-
-              const SizedBox(height: 20),
-
-              FilledButton.icon(
-                onPressed:
-                    isProcessing
-                        ? null
-                        : createVideo,
-                icon: const Icon(
-                  Icons.play_arrow,
-                ),
-                label: const Text(
-                  'СОЗДАТЬ ВИДЕО',
-                  style: TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                style: FilledButton.styleFrom(
-                  padding:
-                      const EdgeInsets.symmetric(
-                    vertical: 18,
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 30),
-
-              const Text(
-                'Первая версия\n\n'
-                '• Автоматически распределяет изображения\n'
-                '• Подгоняет их под длину озвучки\n'
-                '• Создаёт вертикальное видео 9:16\n'
-                '• Добавляет аудио\n'
-                '• Экспортирует MP4\n\n'
-                'Следующая версия сможет добавить '
-                'субтитры, музыку, переходы и Zoom.',
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
+                        onChanged:
+                            processing
+                                ? null
+                                : (value) {
+                                    if (value !=
+                                        null) {
+                                      setState(() {
+                                        fps = value;
+                                      });
+                                    }
+                                  },
+        
